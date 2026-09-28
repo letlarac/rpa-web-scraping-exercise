@@ -16,6 +16,30 @@ class BookData(TypedDict):
 
 
 def scrape_books(page: Page, *, category: str | None, max_books: int) -> list[BookData]:
+    """Scrape book data from https://books.toscrape.com/.
+
+    After navigating to the site homepage, scrapes book data following this
+    contract:
+
+    - `category` is `None`: scrape all books, following the pagination from
+      the homepage without navigating into any category.
+    - `category` matches a sidebar category (case-insensitive): scrape only
+      that category's books, following its pagination.
+    - `category` does not match any sidebar category (or is empty /
+      whitespace-only): return an empty list.
+
+    Stops as soon as `max_books` books have been collected and never request
+    pages beyond the limit. If `max_books` is less than or equal to zero, an
+    empty list is returned.
+
+    Args:
+        page: A Playwright page, already created and navigable.
+        category: The category to scrape, or `None` to scrape all books.
+        max_books: Maximum number of books to scrape.
+
+    Returns:
+        A list of the scraped books.
+    """
     if max_books <= 0:
         return []
 
@@ -27,21 +51,12 @@ def scrape_books(page: Page, *, category: str | None, max_books: int) -> list[Bo
         if not category.strip():
             return []
 
-        categories = page.locator(".side_categories ul li ul li a")
+        category_url = find_category_url(page, category)
 
-        category_found = False
-
-        for i in range(categories.count()):
-            category_link = categories.nth(i)
-            category_name = category_link.text_content()
-
-            if category_name is not None:
-                if category_name.strip().lower() == category.strip().lower():
-                    category_found = True
-                    category_link.click()
-                    break
-        if not category_found:
+        if category_url is None:
             return []
+
+        page.goto(category_url)
 
     while True:
         cards = page.locator(".product_pod")
@@ -62,6 +77,24 @@ def scrape_books(page: Page, *, category: str | None, max_books: int) -> list[Bo
         next_page.click()
 
     return books
+
+
+def find_category_url(page: Page, category: str) -> str | None:
+    categories = page.locator(".side_categories ul li ul li a")
+
+    for i in range(categories.count()):
+        category_link = categories.nth(i)
+        category_name = category_link.text_content()
+
+        if category_name is not None:
+            if category_name.strip().lower() == category.strip().lower():
+                href = category_link.get_attribute("href")
+
+                if href is None or not href.strip():
+                    raise ValueError("Category URL not found.")
+
+                return urljoin(page.url, href)
+    return None
 
 
 def extract_book(card: Locator) -> BookData:
