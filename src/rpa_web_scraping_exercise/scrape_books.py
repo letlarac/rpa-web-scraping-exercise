@@ -2,7 +2,7 @@ from decimal import Decimal, InvalidOperation
 from typing import TypedDict
 from urllib.parse import urljoin
 
-from playwright.sync_api import Page, Locator
+from playwright.sync_api import Locator, Page
 
 URL: str = "https://books.toscrape.com/"
 
@@ -62,7 +62,16 @@ def scrape_books(page: Page, *, category: str | None, max_books: int) -> list[Bo
         cards = page.locator(".product_pod")
 
         for i in range(cards.count()):
-            book = extract_book(cards.nth(i))
+            try:
+                book = extract_book(cards.nth(i))
+
+            except ValueError as error:
+                # The specification does not define how to handle malformed book data.
+                # Raise an error with context so the failure can be investigated before
+                # deciding whether the affected book can safely be skipped.
+                raise ValueError(
+                    f"Failed to extract book {i + 1} from {page.url}: {error}"
+                ) from error
 
             books.append(book)
             if len(books) == max_books:
@@ -116,39 +125,14 @@ def extract_book(card: Locator) -> BookData:
     if price is None:
         raise ValueError("Book price not found.")
 
-    clean_price = ""
-
-    for character in price:
-        if character.isdigit() or character == ".":
-            clean_price += character
-
-    if not clean_price:
-        raise ValueError("Book price is empty.")
-
-    try:
-        numeric_price = Decimal(clean_price)
-    except InvalidOperation:
-        raise ValueError("Invalid book price.")
+    numeric_price = convert_price(price)
 
     rating_class = card.locator(".star-rating").get_attribute("class")
 
     if rating_class is None:
         raise ValueError("Book rating is not valid.")
 
-    rating_map = {
-        "One": 1,
-        "Two": 2,
-        "Three": 3,
-        "Four": 4,
-        "Five": 5,
-    }
-
-    rating_split = rating_class.split()
-    if len(rating_split) < 2:
-        raise ValueError("Book rating is not valid.")
-    rating = rating_map.get(rating_split[1])
-    if rating is None:
-        raise ValueError("Book rating is not valid.")
+    rating = convert_rating(rating_class)
 
     stock_text = card.locator(".availability").text_content()
 
@@ -172,3 +156,37 @@ def extract_book(card: Locator) -> BookData:
     }
 
     return book
+
+
+def convert_price(price_text: str) -> Decimal:
+    clean_price = ""
+
+    for character in price_text:
+        if character.isdigit() or character == ".":
+            clean_price += character
+
+    if not clean_price:
+        raise ValueError("Book price is empty.")
+
+    try:
+        return Decimal(clean_price)
+    except InvalidOperation as error:
+        raise ValueError("Invalid book price.") from error
+
+
+def convert_rating(rating_class: str) -> int:
+    rating_map = {
+        "One": 1,
+        "Two": 2,
+        "Three": 3,
+        "Four": 4,
+        "Five": 5,
+    }
+
+    rating_split = rating_class.split()
+    if len(rating_split) < 2:
+        raise ValueError("Book rating is not valid.")
+    rating = rating_map.get(rating_split[1])
+    if rating is None:
+        raise ValueError("Book rating is not valid.")
+    return rating
